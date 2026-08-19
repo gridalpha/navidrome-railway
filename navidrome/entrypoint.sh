@@ -42,15 +42,32 @@ fi
 # A music server with no music cannot be verified, and a fresh template deploy
 # would otherwise open on an empty page. Seeds a handful of public-domain and
 # CC0 recordings, only while the library is empty, and never fatally.
+DEMO_VERSION=2
 seed_demo_music() {
     [ "${NAVIDROME_DEMO_MUSIC:-false}" = "true" ] || return 0
-    if [ -n "$(ls -A "$MUSIC" 2>/dev/null || true)" ]; then
+
+    # The marker records the demo version and every directory this function
+    # created, so a later version can replace its own content and nothing else.
+    # A library the operator filled has no marker and is never touched.
+    _marker="$MUSIC/.railway-demo"
+    if [ -f "$_marker" ]; then
+        if [ "$(head -n 1 "$_marker")" = "$DEMO_VERSION" ]; then
+            log "demo library skipped: already seeded at version $DEMO_VERSION"
+            return 0
+        fi
+        log "demo library: replacing version $(head -n 1 "$_marker") with $DEMO_VERSION"
+        tail -n +2 "$_marker" | while IFS= read -r _old; do
+            [ -n "$_old" ] && [ -d "$MUSIC/$_old" ] && rm -rf "$MUSIC/$_old"
+        done
+        rm -f "$_marker"
+    elif [ -n "$(ls -A "$MUSIC" 2>/dev/null || true)" ]; then
         log "demo library skipped: $MUSIC already holds files"
         return 0
     fi
 
     log "seeding demo library into $MUSIC (public-domain / CC0 recordings)"
     tmp=$(mktemp -d)
+    mkdir -p "$MUSIC"
 
     # add_track <url> <artist> <album> <track> <title> <year> <filename>
     add_track() {
@@ -61,15 +78,23 @@ seed_demo_music() {
             log "demo library: download failed for $_title"
             return 1
         fi
-        ffmpeg -nostdin -loglevel error -y -i "$tmp/track.ogg" -c copy \
-            -metadata ARTIST="$_artist" \
-            -metadata ALBUMARTIST="$_artist" \
-            -metadata ALBUM="$_album" \
-            -metadata TITLE="$_title" \
-            -metadata TRACKNUMBER="$_track" \
-            -metadata DATE="$_year" \
-            -metadata GENRE="Classical" \
-            -metadata COMMENT="Public-domain recording from Wikimedia Commons" \
+        # An Ogg carries its tags in the audio stream's Vorbis comment header,
+        # and `-c copy` carries that header across verbatim — so a source file
+        # that arrives already tagged keeps its own album and artist and ignores
+        # every -metadata flag. Drop both metadata scopes first, then write both.
+        set -- -map_metadata -1 -map_metadata:s:a:0 -1
+        for _scope in "" ":s:a:0"; do
+            set -- "$@" \
+                -metadata${_scope} ARTIST="$_artist" \
+                -metadata${_scope} ALBUMARTIST="$_artist" \
+                -metadata${_scope} ALBUM="$_album" \
+                -metadata${_scope} TITLE="$_title" \
+                -metadata${_scope} TRACKNUMBER="$_track" \
+                -metadata${_scope} DATE="$_year" \
+                -metadata${_scope} GENRE="Classical" \
+                -metadata${_scope} COMMENT="Public-domain recording from Wikimedia Commons"
+        done
+        ffmpeg -nostdin -loglevel error -y -i "$tmp/track.ogg" -c copy "$@" \
             "$_dir/$_track - $_file.ogg" \
             || { log "demo library: tagging failed for $_title"; return 1; }
         log "demo library: added $_artist - $_title"
@@ -103,7 +128,10 @@ seed_demo_music() {
         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Sergei_Rachmaninoff_cph.3a40575.jpg/960px-Sergei_Rachmaninoff_cph.3a40575.jpg"
 
     rm -rf "$tmp"
-    log "demo library seeded: $(find "$MUSIC" -name '*.ogg' | wc -l) tracks"
+    { printf '%s\n' "$DEMO_VERSION"
+      printf '%s\n' "Frédéric Chopin" "Franz Schubert" "Sergei Rachmaninoff"
+    } > "$_marker"
+    log "demo library seeded: $(find "$MUSIC" -name '*.ogg' | wc -l) tracks (version $DEMO_VERSION)"
 }
 seed_demo_music || log "demo library seeding failed; continuing with an empty library"
 
