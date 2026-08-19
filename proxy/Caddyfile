@@ -1,0 +1,51 @@
+{
+	admin off
+	auto_https off
+	servers {
+		# Railway's edge reaches the container from CGNAT space. Trusting it is
+		# what makes Caddy preserve the X-Forwarded-Proto it sends, so Navidrome
+		# builds https share links rather than http ones.
+		trusted_proxies static 100.64.0.0/10 fd00::/8
+	}
+}
+
+:{$PORT:8080} {
+	log {
+		output stdout
+		format console
+	}
+
+	# Railway delivers "X-Forwarded-For: <real client>, <railway edge>", and the
+	# edge entry is a public address that changes per request. The leftmost entry
+	# is the real client, and it is trustworthy because the edge overwrites any
+	# X-Forwarded-For the client sent.
+	map {header.X-Forwarded-For} {real_client_ip} {
+		~^\s*([^,\s]+)  "${1}"
+		default         {remote_host}
+	}
+
+	# The proxy's own liveness, so Railway health-checks this service rather than
+	# the one behind it.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle {
+		header {
+			# Railway's edge 301s http->https but adds no HSTS, and Navidrome has
+			# no setting for one.
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		}
+
+		reverse_proxy {$NAVIDROME_UPSTREAM:navidrome.railway.internal:4533} {
+			# Navidrome reads the client address through chi's RealIP, which takes
+			# True-Client-IP, then X-Real-IP, then the leftmost X-Forwarded-For.
+			# Railway overwrites only the last of those, so the first two are
+			# attacker-controlled and its login rate limiter is bypassable by
+			# rotating them. Delete one and overwrite the others.
+			header_up -True-Client-IP
+			header_up X-Real-IP {real_client_ip}
+			header_up X-Forwarded-For {real_client_ip}
+		}
+	}
+}
