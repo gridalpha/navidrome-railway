@@ -50,19 +50,45 @@ seed_demo_music() {
     # created, so a later version can replace its own content and nothing else.
     # A library the operator filled has no marker and is never touched.
     _marker="$MUSIC/.railway-demo"
+    _demo_dirs="Frédéric Chopin
+Franz Schubert
+Sergei Rachmaninoff"
+
+    if [ -f "$_marker" ] && [ "$(head -n 1 "$_marker")" = "$DEMO_VERSION" ]; then
+        log "demo library skipped: already seeded at version $DEMO_VERSION"
+        return 0
+    fi
+
     if [ -f "$_marker" ]; then
-        if [ "$(head -n 1 "$_marker")" = "$DEMO_VERSION" ]; then
-            log "demo library skipped: already seeded at version $DEMO_VERSION"
-            return 0
-        fi
+        # Our own seed, one version behind: replace exactly what it recorded.
         log "demo library: replacing version $(head -n 1 "$_marker") with $DEMO_VERSION"
         tail -n +2 "$_marker" | while IFS= read -r _old; do
             [ -n "$_old" ] && [ -d "$MUSIC/$_old" ] && rm -rf "$MUSIC/$_old"
         done
         rm -f "$_marker"
     elif [ -n "$(ls -A "$MUSIC" 2>/dev/null || true)" ]; then
-        log "demo library skipped: $MUSIC already holds files"
-        return 0
+        # No marker. Either a library the operator filled — which must never be
+        # touched — or a demo seeded before the marker existed. Only the second
+        # can consist solely of the directories this function creates.
+        _foreign=0
+        _entries=$(ls -A "$MUSIC" 2>/dev/null || true)
+        _oldifs=$IFS
+        IFS='
+'
+        set -f
+        for _entry in $_entries; do
+            printf '%s\n' "$_demo_dirs" | grep -qxF "$_entry" || _foreign=1
+        done
+        set +f
+        IFS=$_oldifs
+        if [ "$_foreign" = "1" ]; then
+            log "demo library skipped: $MUSIC holds files this seeder did not write"
+            return 0
+        fi
+        log "demo library: replacing an unversioned demo library with version $DEMO_VERSION"
+        printf '%s\n' "$_demo_dirs" | while IFS= read -r _old; do
+            [ -d "$MUSIC/$_old" ] && rm -rf "$MUSIC/$_old"
+        done
     fi
 
     log "seeding demo library into $MUSIC (public-domain / CC0 recordings)"
@@ -128,9 +154,7 @@ seed_demo_music() {
         "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Sergei_Rachmaninoff_cph.3a40575.jpg/960px-Sergei_Rachmaninoff_cph.3a40575.jpg"
 
     rm -rf "$tmp"
-    { printf '%s\n' "$DEMO_VERSION"
-      printf '%s\n' "Frédéric Chopin" "Franz Schubert" "Sergei Rachmaninoff"
-    } > "$_marker"
+    { printf '%s\n' "$DEMO_VERSION"; printf '%s\n' "$_demo_dirs"; } > "$_marker"
     log "demo library seeded: $(find "$MUSIC" -name '*.ogg' | wc -l) tracks (version $DEMO_VERSION)"
 }
 seed_demo_music || log "demo library seeding failed; continuing with an empty library"
